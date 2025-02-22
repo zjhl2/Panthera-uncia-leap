@@ -1,0 +1,465 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Snow Leap</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            overflow: hidden;
+            background-color: #808080; /* 设置背景颜色为灰色 */
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+        }
+        canvas {
+            display: block;
+            background-color: #fff; /* 设置游戏区域背景为白色 */
+            border: 1px solid red; /* 添加边框以便查看 */
+        }
+    </style>
+</head>
+<body>
+    <canvas id="gameCanvas" width="400" height="300"></canvas> <!-- 设置更小的默认宽高 -->
+    <script>
+        const canvas = document.getElementById("gameCanvas");
+        const ctx = canvas.getContext("2d");
+
+        // Set canvas size
+        canvas.width = window.innerWidth / 2; // 将宽度设置为窗口的一半
+        canvas.height = window.innerHeight / 2; // 将高度设置为窗口的一半
+
+        // Ball properties
+        const ball = {
+            x: canvas.width / 2,
+            y: canvas.height - 30,
+            radius: 15,
+            speed: 3,
+            dx: 0,
+            dy: 0,
+            acceleration: 0.08,
+            maxSpeed: 3, // 降低最大速度到3
+            friction: 0.97
+        };
+
+        // Platform properties
+        let platforms = [];
+        const platformWidth = 150;
+        const platformHeight = 10;
+        const minPlatformGap = ball.radius * 4; // 修改最小间距为球直径的2倍
+        const maxPlatformGap = ball.radius * 6; // 修改最大间距为球直径的3倍
+        let nextPlatformY = 0;
+        let scrollSpeed = 1; // 初始速度改为1
+
+        // Game variables
+        let gravity = 0.1;
+        let score = 0;
+        let gameOver = false;
+        let gameStarted = false;
+        let startTime = 0;
+        let endTime = 0;
+        let level = 1;
+        let maxFallSpeed = 8;
+        let baseScrollSpeed = 1; // 基础速度
+
+        // 添加按键状态
+        const keys = {
+            left: false,
+            right: false
+        };
+
+        // 在开头添加雪豹图片加载
+        const snowLeopardRight = new Image();
+        const snowLeopardLeft = new Image();
+        snowLeopardRight.src = 'data:image/png;base64,YOUR_BASE64_IMAGE_RIGHT'; // 需要替换为实际的右向雪豹图片
+        snowLeopardLeft.src = 'data:image/png;base64,YOUR_BASE64_IMAGE_LEFT'; // 需要替换为实际的左向雪豹图片
+
+        // 添加雪豹朝向状态
+        let facingRight = true;
+
+        // 添加像素大小常量
+        const PIXEL_SIZE = 2; // 基础像素大小
+
+        // Event listener for controls
+        window.addEventListener("keydown", function(e) {
+            if (!gameStarted) {
+                if (e.key === "Enter") {
+                    gameStarted = true;
+                    gameOver = false;
+                    startTime = Date.now();
+                    initGame();
+                    requestAnimationFrame(update);
+                }
+                return;
+            }
+            
+            if (e.key === "ArrowLeft") {
+                keys.left = true;
+                facingRight = false;
+            } else if (e.key === "ArrowRight") {
+                keys.right = true;
+                facingRight = true;
+            }
+        });
+
+        window.addEventListener("keyup", function(e) {
+            if (e.key === "ArrowLeft") {
+                keys.left = false;
+            } else if (e.key === "ArrowRight") {
+                keys.right = false;
+            }
+        });
+
+        // Create platforms
+        function createPlatform() {
+            if (nextPlatformY === 0) {
+                nextPlatformY = canvas.height + platformHeight;
+            }
+
+            let validPosition = false;
+            let platformX;
+            let attempts = 0;
+            const maxAttempts = 20; // 增加尝试次数
+
+            while (!validPosition && attempts < maxAttempts) {
+                platformX = Math.random() * (canvas.width - platformWidth);
+                validPosition = true;
+
+                // 检查与所有现有平台的距离
+                for (let platform of platforms) {
+                    const yDistance = Math.abs(platform.y - nextPlatformY);
+                    
+                    // 检查是否有x轴重叠
+                    const hasXOverlap = (
+                        platformX < platform.x + platformWidth &&
+                        platformX + platformWidth > platform.x
+                    );
+
+                    // 如果y轴距离小于最小间距，位置无效
+                    if (yDistance < minPlatformGap) {
+                        validPosition = false;
+                        break;
+                    }
+
+                    // 如果有x轴重叠，需要更大的y轴距离
+                    if (hasXOverlap && yDistance < minPlatformGap * 1.5) {
+                        validPosition = false;
+                        break;
+                    }
+                }
+                attempts++;
+            }
+
+            if (validPosition) {
+                platforms.push({ x: platformX, y: nextPlatformY });
+                // 确保下一个平台的位置至少间隔最小距离
+                nextPlatformY = nextPlatformY - minPlatformGap - Math.random() * (maxPlatformGap - minPlatformGap);
+            }
+        }
+
+        // 像素化绘制函数
+        function drawPixelRect(x, y, width, height, color) {
+            ctx.fillStyle = color;
+            // 将坐标和尺寸都调整为像素大小的整数倍
+            x = Math.floor(x / PIXEL_SIZE) * PIXEL_SIZE;
+            y = Math.floor(y / PIXEL_SIZE) * PIXEL_SIZE;
+            width = Math.ceil(width / PIXEL_SIZE) * PIXEL_SIZE;
+            height = Math.ceil(height / PIXEL_SIZE) * PIXEL_SIZE;
+            ctx.fillRect(x, y, width, height);
+        }
+
+        // 修改绘制球的函数（像素风格侧视雪豹）
+        function drawBall() {
+            const x = Math.floor(ball.x / PIXEL_SIZE) * PIXEL_SIZE;
+            const y = Math.floor(ball.y / PIXEL_SIZE) * PIXEL_SIZE;
+            
+            // 保存当前状态
+            ctx.save();
+            
+            // 根据朝向翻转
+            if (!facingRight) {
+                ctx.translate(x * 2, 0);
+                ctx.scale(-1, 1);
+            }
+            
+            // 身体（主体部分）- 更长的椭圆形
+            drawPixelRect(x - ball.radius, y - ball.radius * 0.7, ball.radius * 2.2, ball.radius * 1.4, '#E0E0E0');
+            
+            // 腿部
+            drawPixelRect(x - ball.radius * 0.8, y + ball.radius * 0.4, PIXEL_SIZE * 3, PIXEL_SIZE * 3, '#D0D0D0'); // 后腿
+            drawPixelRect(x + ball.radius * 0.6, y + ball.radius * 0.4, PIXEL_SIZE * 3, PIXEL_SIZE * 3, '#D0D0D0'); // 前腿
+            
+            // 尾巴 - 向上翘起
+            drawPixelRect(x - ball.radius * 1.2, y - ball.radius * 0.5, PIXEL_SIZE * 4, PIXEL_SIZE * 2, '#E0E0E0');
+            drawPixelRect(x - ball.radius * 1.4, y - ball.radius * 0.8, PIXEL_SIZE * 3, PIXEL_SIZE * 3, '#E0E0E0');
+            
+            // 头部 - 更加圆润
+            drawPixelRect(x + ball.radius * 0.8, y - ball.radius * 0.9, ball.radius * 1.2, ball.radius * 1.2, '#E0E0E0');
+            
+            // 耳朵 - 三角形状
+            drawPixelRect(x + ball.radius * 1.2, y - ball.radius * 1.2, PIXEL_SIZE * 3, PIXEL_SIZE * 3, '#D0D0D0');
+            drawPixelRect(x + ball.radius * 1.6, y - ball.radius * 1.2, PIXEL_SIZE * 3, PIXEL_SIZE * 3, '#D0D0D0');
+            
+            // 眼睛
+            drawPixelRect(x + ball.radius * 1.6, y - ball.radius * 0.4, PIXEL_SIZE * 2, PIXEL_SIZE * 2, '#000000');
+            
+            // 斑点图案
+            const spots = [
+                {x: -0.5, y: -0.3},
+                {x: 0.2, y: 0.2},
+                {x: 0.8, y: -0.4},
+                {x: -0.2, y: 0.1}
+            ];
+            
+            spots.forEach(spot => {
+                drawPixelRect(
+                    x + ball.radius * spot.x,
+                    y + ball.radius * spot.y,
+                    PIXEL_SIZE * 3,
+                    PIXEL_SIZE * 3,
+                    '#808080'
+                );
+            });
+            
+            // 恢复状态
+            ctx.restore();
+            
+            // 如果需要显示碰撞区域
+            /*
+            ctx.beginPath();
+            ctx.arc(ball.x, ball.y, ball.radius, 0, Math.PI * 2);
+            ctx.strokeStyle = 'red';
+            ctx.stroke();
+            */
+        }
+
+        // 修改绘制平台的函数（像素风格冰块）
+        function drawPlatforms() {
+            platforms.forEach(platform => {
+                const x = Math.floor(platform.x / PIXEL_SIZE) * PIXEL_SIZE;
+                const y = Math.floor(platform.y / PIXEL_SIZE) * PIXEL_SIZE;
+                
+                // 主体
+                drawPixelRect(x, y, platformWidth, platformHeight, 'rgba(135, 206, 235, 0.8)');
+                
+                // 顶部高光
+                drawPixelRect(x, y, platformWidth, PIXEL_SIZE * 2, 'rgba(255, 255, 255, 0.8)');
+                
+                // 冰晶装饰
+                for (let i = 0; i < platformWidth; i += PIXEL_SIZE * 4) {
+                    drawPixelRect(x + i, y + platformHeight/2, PIXEL_SIZE * 2, PIXEL_SIZE * 2, 'rgba(255, 255, 255, 0.6)');
+                }
+            });
+        }
+
+        // 修改文字绘制样式
+        function drawPixelText(text, x, y, size = "16px", align = "center") {
+            ctx.fillStyle = "#000";
+            ctx.font = `${size} 'Press Start 2P', monospace`;
+            ctx.textAlign = align;
+            ctx.fillText(text, x, y);
+        }
+
+        // 修改开始页面
+        function drawStartScreen() {
+            ctx.fillStyle = "rgba(255, 255, 255, 0.8)";
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+            drawPixelText("SNOW LEAP", canvas.width / 2, canvas.height / 2 - 40, "24px");
+            drawPixelText("Press ENTER to Start", canvas.width / 2, canvas.height / 2 + 20);
+        }
+
+        // 修改结算页面
+        function drawGameOverScreen() {
+            ctx.fillStyle = "rgba(255, 255, 255, 0.5)";
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+            
+            const survivedSeconds = ((endTime - startTime) / 1000).toFixed(1);
+            const centerY = canvas.height / 2;
+            
+            drawPixelText("GAME OVER!", canvas.width / 2, centerY - 50);
+            drawPixelText(`Time: ${survivedSeconds}s`, canvas.width / 2, centerY - 10);
+            drawPixelText("Well Done!", canvas.width / 2, centerY + 30);
+            drawPixelText("Press ENTER to Restart", canvas.width / 2, centerY + 70);
+        }
+
+        // 更新速度档位的函数
+        function updateLevel() {
+            // 计算精确的时间（秒）
+            const timeElapsed = (Date.now() - startTime) / 1000;
+            // 计算精确的等级（可以是小数）
+            level = 1 + timeElapsed / 10;
+            // 平滑计算速度
+            scrollSpeed = baseScrollSpeed + (level - 1) * 0.5;
+            
+            // 在显示时将等级四舍五入
+            const displayLevel = Math.floor(level);
+            return displayLevel;
+        }
+
+        // Update game elements
+        function update() {
+            if (!gameStarted) {
+                if (gameOver) {
+                    drawGameOverScreen();
+                } else {
+                    drawStartScreen();
+                }
+                return;
+            }
+
+            console.log("Updating..."); // 调试信息
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+            // 更新速度档位
+            const displayLevel = updateLevel();
+
+            // Update platform positions
+            platforms.forEach(platform => {
+                platform.y -= scrollSpeed;
+            });
+
+            // Remove platforms that are out of the screen
+            platforms = platforms.filter(platform => platform.y + platformHeight > 0);
+
+            // 处理移动
+            if (keys.left) {
+                ball.dx = Math.max(ball.dx - ball.acceleration, -ball.maxSpeed);
+                if (ball.dx > -2) ball.dx = -2; // 设置最小速度
+            }
+            if (keys.right) {
+                ball.dx = Math.min(ball.dx + ball.acceleration, ball.maxSpeed);
+                if (ball.dx < 2) ball.dx = 2; // 设置最小速度
+            }
+
+            // Update ball position with friction
+            ball.x += ball.dx;
+            ball.y += ball.dy;
+            ball.dy += gravity;
+            if (!keys.left && !keys.right) {
+                ball.dx *= ball.friction; // 只在没有按键时应用摩擦力
+            }
+            
+            // 限制小球下落速度
+            if (ball.dy > maxFallSpeed) {
+                ball.dy = maxFallSpeed;
+            }
+
+            // Boundary collision
+            if (ball.x - ball.radius < 0) {
+                ball.x = ball.radius;
+                ball.dx = 0;
+            }
+            if (ball.x + ball.radius > canvas.width) {
+                ball.x = canvas.width - ball.radius;
+                ball.dx = 0;
+            }
+
+            // 修改碰到顶部的游戏结束条件
+            if (ball.y - ball.radius < 0) {
+                handleGameOver();
+                return;
+            }
+
+            // 修改掉出底部的游戏结束条件
+            if (ball.y > canvas.height + ball.radius) {
+                handleGameOver();
+                return;
+            }
+
+            // Check platform collisions
+            checkPlatformCollision();
+
+            // Draw everything
+            drawBall();
+            drawPlatforms();
+
+            // 修改平台生成逻辑
+            const lowestPlatform = Math.max(...platforms.map(p => p.y));
+            // 如果最低的平台已经移动到画面中间以上，就生成新平台
+            if (lowestPlatform < canvas.height) {
+                nextPlatformY = canvas.height + platformHeight; // 从画面底部生成
+                createPlatform();
+            }
+
+            // 计算当前存活秒数
+            const currentSeconds = ((Date.now() - startTime) / 1000).toFixed(1);
+
+            // 在右上角显示秒数
+            drawPixelText(`${currentSeconds}s`, canvas.width - 60, 25, "16px", "right");
+
+            requestAnimationFrame(update);
+        }
+
+        // Initialize game
+        function initGame() {
+            // 重置游戏状态
+            platforms = [];
+            score = 0;
+            level = 1;
+            scrollSpeed = baseScrollSpeed;
+            nextPlatformY = 0; // 重置下一个平台的Y坐标
+            
+            // 创建初始平台
+            const initialPlatform = {
+                x: canvas.width / 2 - platformWidth / 2,
+                y: canvas.height - 50
+            };
+            platforms.push(initialPlatform);
+            nextPlatformY = initialPlatform.y; // 设置下一个平台的起始Y坐标
+            
+            // 预先生成一些平台
+            for (let i = 0; i < 5; i++) {
+                createPlatform();
+            }
+            
+            // Place ball on initial platform
+            ball.x = initialPlatform.x + platformWidth / 2;
+            ball.y = initialPlatform.y - ball.radius;
+            ball.dy = 0;
+            ball.dx = 0; // 重置水平速度
+            
+            // 绘制第一帧
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            drawBall();
+            drawPlatforms();
+        }
+
+        // 修改游戏结束处理
+        function handleGameOver() {
+            gameOver = true;
+            gameStarted = false;
+            endTime = Date.now();
+            
+            // 先绘制最后一帧游戏画面
+            drawBall();
+            drawPlatforms();
+            
+            // 然后在上面绘制结算信息
+            drawGameOverScreen();
+        }
+
+        // Check for platform collision
+        function checkPlatformCollision() {
+            for (let i = 0; i < platforms.length; i++) {
+                const p = platforms[i];
+                if (
+                    ball.x + ball.radius * 0.7 > p.x && // 增加水平方向的判定余地
+                    ball.x - ball.radius * 0.7 < p.x + platformWidth && // 增加水平方向的判定余地
+                    ball.y + ball.radius > p.y && 
+                    ball.y + ball.radius < p.y + platformHeight
+                ) {
+                    ball.y = p.y - ball.radius;
+                    ball.dy = 0;
+                    break;
+                }
+            }
+        }
+
+        // Start with the start screen
+        drawStartScreen();
+    </script>
+</body>
+</html>
